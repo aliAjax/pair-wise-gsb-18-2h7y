@@ -1,160 +1,142 @@
+// 页面层：电话分诊工作台总装。资料(types/time/storage)、判断(triageRules/scheduleRules)、
+// 本机保存(storage)与本目录页面组件分开维护；关掉页面后由 localStorage 接着排
+
+import { useMemo, useState } from "react";
 import "./styles.css";
+import { StoreProvider, useStore } from "./triage/store";
+import type { TriageCall } from "./triage/types";
+import { isOverdue } from "./triage/triageRules";
+import { formatDateTime } from "./triage/time";
+import TriageIntake from "./components/TriageIntake";
+import QueuePanel from "./components/QueuePanel";
+import ChairBoard from "./components/ChairBoard";
+import RecordsPanel from "./components/RecordsPanel";
+import { AssignModal, RescheduleModal, TreatmentModal } from "./components/Modals";
 
-const project = {
-  "id": "hxwl-04",
-  "port": 5104,
-  "title": "牙科根管治疗",
-  "subtitle": "按牙位组织根管步骤、工作长度与复诊计划",
-  "stack": "React + Vite + TypeScript + CSS",
-  "theme": [
-    "#0369a1",
-    "#7c3aed",
-    "#ea580c"
-  ],
-  "domain": "牙体牙髓",
-  "users": [
-    "牙科医生",
-    "助理",
-    "前台复诊协调员"
-  ],
-  "metrics": [
-    "待复诊",
-    "已充填",
-    "平均工作长度",
-    "封药病例"
-  ],
-  "filters": [
-    "开髓",
-    "测长",
-    "封药",
-    "充填"
-  ],
-  "fields": [
-    "牙位",
-    "开髓",
-    "测长",
-    "根管预备",
-    "冲洗",
-    "封药",
-    "主尖锉号"
-  ],
-  "records": [
-    [
-      "#36",
-      "慢性根尖周炎",
-      "封药",
-      "MB 19.5mm，主尖锉#30"
-    ],
-    [
-      "#11",
-      "外伤后变色",
-      "充填",
-      "单根管，冷侧压完成"
-    ],
-    [
-      "#46",
-      "急性牙髓炎",
-      "测长",
-      "近中双根管需复诊"
-    ]
-  ]
-};
+type ModalKind = "assign" | "reschedule" | "treat";
 
-const statusColors = ["status-ok", "status-watch", "status-danger"];
+function TriageWorkbench() {
+  const { state, resetDemo } = useStore();
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [modal, setModal] = useState<{ kind: ModalKind; callId: string } | null>(null);
+  const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
 
-function MetricCard({ label, value, index }: { label: string; value: string; index: number }) {
-  return (
-    <article className="metric-card">
-      <span>{label}</span>
-      <strong>{value}</strong>
-      <i className={statusColors[index % statusColors.length]} />
-    </article>
+  const selectedCall = useMemo(
+    () => state.calls.find((c) => c.id === selectedId) ?? null,
+    [state.calls, selectedId]
   );
-}
+  const modalCall = useMemo(
+    () => (modal ? state.calls.find((c) => c.id === modal.callId) ?? null : null),
+    [state.calls, modal]
+  );
 
-function App() {
-  const values = project.metrics.map((metric: string, index: number) => {
-    const base = [84, 12, 31, 7][index % 4];
-    return String(base + index * 3);
-  });
+  const notice = (msg: string, ok: boolean) => {
+    setToast({ msg, ok });
+    window.setTimeout(() => setToast(null), 3200);
+  };
+
+  const openAction = (call: TriageCall, kind: ModalKind) => {
+    setSelectedId(call.id);
+    setModal({ kind, callId: call.id });
+  };
+
+  const stats = useMemo(() => {
+    const active = state.calls.filter((c) => c.status !== "completed");
+    const booked = state.bookings.filter((b) => b.status === "pending").length;
+    const overdue = active.filter((c) => isOverdue(c)).length;
+    return [
+      { label: "待处理来电", value: active.length, tone: "ok" },
+      { label: "急救待排（等待区）", value: active.filter((c) => c.status === "waiting").length, tone: "danger" },
+      { label: "已占椅位时段", value: booked, tone: "watch" },
+      { label: "超时未处理", value: overdue, tone: overdue > 0 ? "danger" : "ok" },
+      { label: "累计已接诊", value: state.calls.filter((c) => c.status === "completed").length, tone: "ok" },
+    ];
+  }, [state]);
 
   return (
-    <main className="app-shell">
+    <main className="app-shell triage-shell">
       <section className="hero">
         <div>
-          <p className="eyebrow">{project.id} · port {project.port}</p>
-          <h1>{project.title}</h1>
-          <p className="subtitle">{project.subtitle}</p>
+          <p className="eyebrow">hxwl-04 · 牙体牙髓 · 电话分诊</p>
+          <h1>根管术后夜间来电分诊台</h1>
+          <p className="subtitle">
+            登记患者、牙位、来电时刻、疼痛分值与夜间痛；系统按症状给复诊时限，
+            当天需处理的进急救待排，同一牙椅同一时段只留一人，排不上留在等待区并写清冲突。
+          </p>
         </div>
         <div className="stack-card">
-          <span>技术栈</span>
-          <strong>{project.stack}</strong>
+          <span>本机自动保存</span>
+          <strong>最近保存 {formatDateTime(state.savedAt)}</strong>
+          <p className="save-note">资料存在本机浏览器，关掉页面后仍能接着排；不上传服务器。</p>
+          <button className="reset-btn" onClick={resetDemo}>重置为演示数据</button>
         </div>
       </section>
 
-      <section className="metrics-grid">
-        {project.metrics.map((metric: string, index: number) => (
-          <MetricCard key={metric} label={metric} value={values[index]} index={index} />
+      <section className="metrics-grid metrics-5">
+        {stats.map((s) => (
+          <article key={s.label} className="metric-card">
+            <span>{s.label}</span>
+            <strong>{s.value}</strong>
+            <i className={`status-${s.tone}`} />
+          </article>
         ))}
       </section>
 
-      <section className="workspace">
-        <aside className="panel narrow">
-          <h2>角色</h2>
-          <div className="chips">
-            {project.users.map((user: string) => (
-              <span key={user}>{user}</span>
-            ))}
-          </div>
-          <h2>筛选</h2>
-          <div className="chips muted">
-            {project.filters.map((filter: string) => (
-              <button key={filter}>{filter}</button>
-            ))}
-          </div>
-        </aside>
+      <TriageIntake onRegistered={(id) => { setSelectedId(id); notice("已登记并完成分诊", true); }} />
 
-        <section className="panel">
-          <div className="section-heading">
-            <div>
-              <p>{project.domain}</p>
-              <h2>记录字段</h2>
-            </div>
-            <button className="primary-action">新增记录</button>
-          </div>
-          <div className="field-grid">
-            {project.fields.map((field: string) => (
-              <label key={field}>
-                <span>{field}</span>
-                <input placeholder={"填写" + field} />
-              </label>
-            ))}
-          </div>
-        </section>
-      </section>
+      <QueuePanel
+        selectedId={selectedId}
+        onSelect={setSelectedId}
+        onAction={openAction}
+        notice={notice}
+      />
 
-      <section className="records panel">
-        <div className="section-heading">
-          <div>
-            <p>示例数据</p>
-            <h2>近期记录</h2>
-          </div>
-          <button>导出摘要</button>
-        </div>
-        <div className="record-list">
-          {project.records.map((record: string[], index: number) => (
-            <article key={record.join("-")} className="record-card">
-              <div className="record-index">{String(index + 1).padStart(2, "0")}</div>
-              <div>
-                <h3>{record[0]}</h3>
-                <p>{record.slice(1).join(" · ")}</p>
-              </div>
-            </article>
-          ))}
-        </div>
-      </section>
+      <ChairBoard
+        selectedCall={selectedCall}
+        onAction={openAction}
+        notice={notice}
+      />
+
+      <RecordsPanel />
+
+      <footer className="page-foot">
+        分层：资料（types / time / storage 初始数据）· 判断（triageRules / scheduleRules）·
+        本机保存（localStorage）· 页面（components）。判断规则与页面解耦，可独立核对调整。
+      </footer>
+
+      {modal && modalCall && modal.kind === "assign" && (
+        <AssignModal
+          call={modalCall}
+          onClose={() => setModal(null)}
+          onDone={(r) => { setModal(null); notice(r.message, r.ok); }}
+        />
+      )}
+      {modal && modalCall && modal.kind === "reschedule" && (
+        <RescheduleModal
+          call={modalCall}
+          onClose={() => setModal(null)}
+          onDone={(r) => { setModal(null); notice(r.message, r.ok); }}
+        />
+      )}
+      {modal && modalCall && modal.kind === "treat" && (
+        <TreatmentModal
+          call={modalCall}
+          onClose={() => setModal(null)}
+          onDone={(r) => { setModal(null); notice(r.message, r.ok); }}
+        />
+      )}
+
+      {toast && (
+        <div className={`toast ${toast.ok ? "ok" : "err"}`}>{toast.msg}</div>
+      )}
     </main>
   );
 }
 
-export default App;
+export default function App() {
+  return (
+    <StoreProvider>
+      <TriageWorkbench />
+    </StoreProvider>
+  );
+}
